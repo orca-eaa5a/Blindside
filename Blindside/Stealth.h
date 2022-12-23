@@ -88,6 +88,10 @@ DWORD ChangePerms(PVOID textBase, DWORD flProtect, SIZE_T size)
 
 BOOL OverwriteNtdll(PVOID ntdllBase, PVOID freshntDllBase, PIMAGE_EXPORT_DIRECTORY hooked_pImageExportDirectory, PIMAGE_EXPORT_DIRECTORY pImageExportDirectory, PIMAGE_SECTION_HEADER textsection)
 {
+	/**
+	 * Find the address of ntdll.NtAllocateVirtualMemory
+	 * 
+	 */
 	PDWORD pdwAddressOfFunctions = (PDWORD)((PBYTE)ntdllBase + hooked_pImageExportDirectory->AddressOfFunctions);
 	PDWORD pdwAddressOfNames = (PDWORD)((PBYTE)ntdllBase + hooked_pImageExportDirectory->AddressOfNames);
 	PWORD pwAddressOfNameOrdinales = (PWORD)((PBYTE)ntdllBase + hooked_pImageExportDirectory->AddressOfNameOrdinals);
@@ -99,8 +103,16 @@ BOOL OverwriteNtdll(PVOID ntdllBase, PVOID freshntDllBase, PIMAGE_EXPORT_DIRECTO
 		if (strstr(pczFunctionName, (CHAR*)"Nt") != NULL)
 		{
 			PVOID funcAddress = GetTableEntry(freshntDllBase, pImageExportDirectory, pczFunctionName);
+			/**
+			 * v--- I don't understand why this condition would need..
+			 */
 			if (funcAddress != 0x00 && std::strcmp((CHAR*)"NtAccessCheck", pczFunctionName) != 0)
 			{
+				/**
+				 * remove the hook,
+				 * if current export export function name of ntdll.dll is 
+				 * "NtAllocateVirtualMemory"
+				 */
 				if (strcmp(pczFunctionName, "NtAllocateVirtualMemory") == 0) {
 					printf("[STEALTH] Function Name : %s\n", pczFunctionName);
 					printf("[STEALTH] Address of Function: 0x%p\n", funcAddress);
